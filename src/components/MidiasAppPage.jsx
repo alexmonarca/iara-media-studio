@@ -534,6 +534,24 @@ export default function MidiasAppPage({
 
       caption = String(caption || "").trim();
 
+      // Alguns modelos / prompts podem devolver JSON como texto.
+      // Aceitamos { caption, image } para compatibilidade com fluxos antigos.
+      if (caption && (caption.startsWith("{") || caption.startsWith("["))) {
+        try {
+          const parsed = JSON.parse(caption);
+          if (parsed && typeof parsed === "object") {
+            if (typeof parsed.caption === "string" && parsed.caption.trim()) caption = parsed.caption.trim();
+            if (!imageBase64 && typeof parsed.image === "string" && parsed.image.trim()) imageBase64 = parsed.image.trim();
+          }
+        } catch (_e) {
+          // ignora (não era JSON)
+        }
+      }
+
+      if (!caption && !imageBase64) {
+        throw new Error("A resposta do Gemini veio vazia. Tente novamente com um prompt mais específico.");
+      }
+
       let imageUrl = "";
       if (!isTextOnly && imageBase64) {
         const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
@@ -964,10 +982,25 @@ export default function MidiasAppPage({
                 )}
               </div>
             ) : (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-border bg-background/40 p-4">
-                  <div className="text-xs text-muted-foreground">Formato</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
+              <div className="space-y-5">
+                <div className="rounded-3xl border border-border bg-background/40 p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-foreground">Formato</div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedFormat === "texto" ? "Ideia/legenda" : "Imagem + legenda"} ·{" "}
+                        <span className="text-foreground">
+                          {selectedFormat === "texto" ? "1 crédito" : "10 créditos"}
+                        </span>
+                      </p>
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      {brandData.logo_url ? "Logo configurado" : "Sem logo"} · {brandData.reference_images.length}/3 refs
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
                     {formats.map((f) => {
                       const Icon = f.icon;
                       const active = selectedFormat === f.id;
@@ -977,32 +1010,55 @@ export default function MidiasAppPage({
                           type="button"
                           onClick={() => setSelectedFormat(f.id)}
                           className={
-                            "h-10 px-4 rounded-full border text-sm inline-flex items-center gap-2 transition-colors " +
+                            "group relative overflow-hidden rounded-2xl border p-3 text-left transition-colors " +
                             (active
-                              ? "border-primary/40 bg-primary/10 text-foreground"
-                              : "border-border bg-background/40 text-muted-foreground hover:bg-background/60")
+                              ? "border-primary/40 bg-primary/10"
+                              : "border-border bg-card/40 hover:bg-card/60")
                           }
                         >
-                          <Icon className="w-4 h-4" /> {f.label}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className={"text-sm font-semibold truncate " + (active ? "text-foreground" : "text-foreground")}>{f.label}</div>
+                              <div className="mt-1 text-[11px] text-muted-foreground">
+                                {f.id === "texto"
+                                  ? "Só texto"
+                                  : f.id === "story"
+                                    ? "9:16"
+                                    : f.id === "retrato_4x5"
+                                      ? "3:4"
+                                      : "1:1"}
+                              </div>
+                            </div>
+                            <div
+                              className={
+                                "h-9 w-9 rounded-2xl border flex items-center justify-center transition-colors " +
+                                (active
+                                  ? "border-primary/30 bg-primary/10 text-primary"
+                                  : "border-border bg-background/40 text-muted-foreground group-hover:text-foreground")
+                              }
+                            >
+                              <Icon className="w-4 h-4" />
+                            </div>
+                          </div>
+
+                          {active && <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]" />}
                         </button>
                       );
                     })}
-                  </div>
-                  <div className="mt-3 text-xs text-muted-foreground">
-                    {selectedFormat === "texto" ? "Texto consome 1 crédito" : "Imagem consome 10 créditos"}. {brandData.logo_url ? "Logo ok" : "Sem logo"} ·{" "}
-                    {brandData.reference_images.length}/3 refs
                   </div>
                 </div>
 
                 <section className="rounded-3xl border border-border bg-card/60 overflow-hidden">
                   <div className="p-4 border-b border-border">
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-xl border border-border bg-background/40 flex items-center justify-center">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-2xl border border-border bg-background/40 flex items-center justify-center">
                         <Sparkles className="w-4 h-4 text-primary" />
                       </div>
-                      <div>
-                        <h2 className="text-base font-semibold text-foreground">Chat IA Gestor de Mídias</h2>
-                        <p className="text-xs text-muted-foreground">Peça artes e legendas como numa conversa</p>
+                      <div className="min-w-0">
+                        <h2 className="text-base font-semibold text-foreground truncate">Gerar</h2>
+                        <p className="text-xs text-muted-foreground truncate">
+                          Descreva o post e eu retorno {selectedFormat === "texto" ? "uma ideia/legenda" : "a arte + legenda"}.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -1040,7 +1096,7 @@ export default function MidiasAppPage({
                           value={inputValue}
                           onChange={(e) => setInputValue(e.target.value)}
                           disabled={!canUse}
-                          placeholder={canUse ? "Descreva a arte que você quer..." : "Upgrade necessário"}
+                          placeholder={canUse ? "Ex.: post com oferta de avaliação + CTA no WhatsApp" : "Upgrade necessário"}
                           className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <button
