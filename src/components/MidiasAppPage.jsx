@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { GoogleGenAI } from "@google/genai";
 import { env } from "@/config/env";
+import GeneratedArtsHistoryList from "@/components/midias/GeneratedArtsHistoryList";
+import GeneratedArtDetailsModal from "@/components/midias/GeneratedArtDetailsModal";
 
 const STORAGE_BUCKET = "brand-assets";
 
@@ -160,7 +162,10 @@ export default function MidiasAppPage({
   const [effectiveUserId, setEffectiveUserId] = useState(userId || "");
 
   const [credits, setCredits] = useState(0);
-  const [history, setHistory] = useState([]);
+  const [creditHistory, setCreditHistory] = useState([]);
+  const [generatedArts, setGeneratedArts] = useState([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selectedArt, setSelectedArt] = useState(null);
 
   const [messages, setMessages] = useState([
     {
@@ -279,7 +284,17 @@ export default function MidiasAppPage({
         });
       }
 
-      // history
+      // histórico (gerações)
+      const { data: gData, error: gErr } = await supabaseClient
+        .from("generated_arts")
+        .select("id,image_url,caption,format,prompt,created_at")
+        .eq("user_id", resolvedUserId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (gErr) throw gErr;
+      setGeneratedArts(Array.isArray(gData) ? gData : []);
+
+      // extrato (créditos)
       const { data: hData, error: hErr } = await supabaseClient
         .from("credit_transactions")
         .select("id,amount,description,created_at")
@@ -287,7 +302,7 @@ export default function MidiasAppPage({
         .order("created_at", { ascending: false })
         .limit(50);
       if (hErr) throw hErr;
-      setHistory(hData || []);
+      setCreditHistory(hData || []);
     } catch (e) {
       setErrorMsg(formatError(e));
     } finally {
@@ -298,6 +313,37 @@ export default function MidiasAppPage({
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabaseClient, resolvedUserId]);
+
+  // Realtime: quando uma nova arte entrar na tabela, atualiza histórico automaticamente
+  useEffect(() => {
+    if (!supabaseClient || !resolvedUserId) return;
+
+    const channel = supabaseClient
+      .channel(`generated_arts_${resolvedUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "generated_arts",
+          filter: `user_id=eq.${resolvedUserId}`,
+        },
+        (payload) => {
+          const row = payload?.new;
+          if (!row?.id) return;
+          setGeneratedArts((prev) => {
+            const exists = prev.some((p) => p.id === row.id);
+            if (exists) return prev;
+            return [row, ...prev].slice(0, 50);
+          });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
   }, [supabaseClient, resolvedUserId]);
 
   const uploadToStorage = async (file, kind) => {
@@ -584,7 +630,24 @@ export default function MidiasAppPage({
       });
       if (rpcErr) throw rpcErr;
 
+
+      // 4) salva no histórico do gerador
+      try {
+        const { error: insErr } = await supabaseClient.from("generated_arts").insert({
+          user_id: resolvedUserId,
+          image_url: imageUrl || null,
+          caption: caption || null,
+          format: selectedFormat,
+          prompt: prompt,
+        });
+        if (insErr) throw insErr;
+      } catch (saveErr) {
+        // não bloqueia o usuário se falhar salvar; apenas avisa.
+        console.warn("Falha ao salvar em generated_arts:", saveErr);
+      }
+
       await loadAll();
+
     } catch (e) {
       setErrorMsg(formatError(e));
     } finally {
@@ -962,24 +1025,59 @@ export default function MidiasAppPage({
                 </div>
               </div>
             ) : activeTab === "historico" ? (
-              <div className="space-y-3">
-                {history.length === 0 ? (
-                  <div className="rounded-2xl border border-border bg-background/40 p-4 text-sm text-muted-foreground">
-                    Sem transações ainda.
-                  </div>
-                ) : (
-                  history.map((row) => (
-                    <div key={row.id} className="rounded-2xl border border-border bg-background/40 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm text-foreground">{row.description || "—"}</div>
-                        <div className="text-sm font-semibold text-foreground">{row.amount}</div>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {row.created_at ? new Date(row.created_at).toLocaleString() : "—"}
-                      </div>
+              <div className="space-y-5">
+                <div className="rounded-3xl border border-border bg-background/40 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-foreground">Histórico de criações</div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        As novas artes entram automaticamente aqui (tempo real).
+                      </p>
                     </div>
-                  ))
-                )}
+                    <button
+                      type="button"
+                      onClick={loadAll}
+                      className="h-9 px-4 rounded-full border border-border bg-background/40 text-foreground hover:bg-background/60 transition-colors text-xs font-semibold"
+                    >
+                      Atualizar
+                    </button>
+                  </div>
+
+                  <div className="mt-4">
+                    <GeneratedArtsHistoryList
+                      items={generatedArts}
+                      onOpenDetails={(art) => {
+                        setSelectedArt(art);
+                        setDetailsOpen(true);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-border bg-background/40 p-4">
+                  <div className="text-sm font-semibold text-foreground">Extrato de créditos</div>
+                  <p className="mt-1 text-xs text-muted-foreground">Registro das últimas movimentações.</p>
+
+                  <div className="mt-3 space-y-2">
+                    {creditHistory.length === 0 ? (
+                      <div className="rounded-2xl border border-border bg-background/40 p-4 text-sm text-muted-foreground">
+                        Sem transações ainda.
+                      </div>
+                    ) : (
+                      creditHistory.map((row) => (
+                        <div key={row.id} className="rounded-2xl border border-border bg-background/40 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-sm text-foreground">{row.description || "—"}</div>
+                            <div className="text-sm font-semibold text-foreground">{row.amount}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {row.created_at ? new Date(row.created_at).toLocaleString() : "—"}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="space-y-5">
@@ -1165,6 +1263,15 @@ export default function MidiasAppPage({
           </div>
         </aside>
       </div>
+
+      <GeneratedArtDetailsModal
+        open={detailsOpen}
+        art={selectedArt}
+        onClose={() => {
+          setDetailsOpen(false);
+          setSelectedArt(null);
+        }}
+      />
     </main>
   );
 }
