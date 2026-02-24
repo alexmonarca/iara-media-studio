@@ -14,8 +14,9 @@ import {
   RefreshCw,
   Send,
 } from "lucide-react";
+import { GoogleGenAI } from "@google/genai";
+import { env } from "@/config/env";
 
-const N8N_WEBHOOK_URL = "https://webhook.monarcahub.com/webhook/midias";
 const STORAGE_BUCKET = "brand-assets";
 
 function formatError(e) {
@@ -26,6 +27,18 @@ function formatError(e) {
 
 async function fileToArrayBuffer(file) {
   return await file.arrayBuffer();
+}
+
+async function urlToBase64(url) {
+  if (!url) return null;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Falha ao baixar referência (${resp.status})`);
+  const blob = await resp.blob();
+  return await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function compressImageFile(file, { maxSize = 1_500_000, maxDimension = 1600, quality = 0.82 } = {}) {
@@ -143,6 +156,9 @@ export default function MidiasAppPage({
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Segurança: sempre preferir o userId da sessão atual (evita injetar ID via props).
+  const [effectiveUserId, setEffectiveUserId] = useState(userId || "");
+
   const [credits, setCredits] = useState(0);
   const [history, setHistory] = useState([]);
 
@@ -171,6 +187,27 @@ export default function MidiasAppPage({
   const [newColor, setNewColor] = useState("#EA580C");
   const [saveStatus, setSaveStatus] = useState(null); // saving|saved|error
 
+  const resolvedUserId = effectiveUserId || userId;
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabaseClient) return;
+
+    supabaseClient.auth
+      .getUser()
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error) return;
+        const sessionUserId = data?.user?.id;
+        if (sessionUserId) setEffectiveUserId(sessionUserId);
+      })
+      .catch(() => null);
+
+    return () => {
+      alive = false;
+    };
+  }, [supabaseClient]);
+
   // Regra:
   // - Acesso ao módulo: saldo > 0 OU pacote mensal selecionado
   // - Uso (gerar): exige saldo suficiente
@@ -188,7 +225,7 @@ export default function MidiasAppPage({
   );
 
   const loadAll = async () => {
-    if (!supabaseClient || !userId) return;
+    if (!supabaseClient || !resolvedUserId) return;
     setLoading(true);
     setErrorMsg("");
 
@@ -197,7 +234,7 @@ export default function MidiasAppPage({
       const { data: pData, error: pErr } = await supabaseClient
         .from("profiles")
         .select("credits_balance")
-        .eq("id", userId)
+        .eq("id", resolvedUserId)
         .maybeSingle();
       if (pErr) throw pErr;
       setCredits(pData?.credits_balance ?? 0);
@@ -211,16 +248,19 @@ export default function MidiasAppPage({
         const attemptUserId = await supabaseClient
           .from("brand_settings")
           .select("id,user_id,logo_url,colors,reference_images,personality,tone_of_voice")
-          .eq("user_id", userId)
+          .eq("user_id", resolvedUserId)
           .maybeSingle();
 
         if (!attemptUserId.error) {
           bData = attemptUserId.data;
-        } else if (String(attemptUserId.error?.message || "").includes("column") && String(attemptUserId.error?.message || "").includes("user_id")) {
+        } else if (
+          String(attemptUserId.error?.message || "").includes("column") &&
+          String(attemptUserId.error?.message || "").includes("user_id")
+        ) {
           const attemptId = await supabaseClient
             .from("brand_settings")
             .select("id,logo_url,colors,reference_images,personality,tone_of_voice")
-            .eq("id", userId)
+            .eq("id", resolvedUserId)
             .maybeSingle();
           if (attemptId.error) throw attemptId.error;
           bData = attemptId.data;
@@ -243,7 +283,7 @@ export default function MidiasAppPage({
       const { data: hData, error: hErr } = await supabaseClient
         .from("credit_transactions")
         .select("id,amount,description,created_at")
-        .eq("user_id", userId)
+        .eq("user_id", resolvedUserId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (hErr) throw hErr;
@@ -258,13 +298,13 @@ export default function MidiasAppPage({
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabaseClient, userId]);
+  }, [supabaseClient, resolvedUserId]);
 
   const uploadToStorage = async (file, kind) => {
-    if (!supabaseClient || !userId) throw new Error("Sem sessão.");
+    if (!supabaseClient || !resolvedUserId) throw new Error("Sem sessão.");
 
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-    const path = `midias/${userId}/${kind}-${Date.now()}.${ext}`;
+    const path = `midias/${resolvedUserId}/${kind}-${Date.now()}.${ext}`;
 
     const { error: upErr } = await supabaseClient.storage
       .from(STORAGE_BUCKET)
@@ -328,7 +368,7 @@ export default function MidiasAppPage({
   };
 
   const handleSaveBrand = async () => {
-    if (!supabaseClient || !userId) return;
+    if (!supabaseClient || !resolvedUserId) return;
 
     setSaveStatus("saving");
     setErrorMsg("");
@@ -344,14 +384,17 @@ export default function MidiasAppPage({
       // Preferido: user_id
       const attemptUserId = await supabaseClient
         .from("brand_settings")
-        .upsert({ ...basePayload, user_id: userId }, { onConflict: "user_id" });
+        .upsert({ ...basePayload, user_id: resolvedUserId }, { onConflict: "user_id" });
 
       if (attemptUserId.error) {
         // Legado: id == userId
-        if (String(attemptUserId.error?.message || "").includes("column") && String(attemptUserId.error?.message || "").includes("user_id")) {
+        if (
+          String(attemptUserId.error?.message || "").includes("column") &&
+          String(attemptUserId.error?.message || "").includes("user_id")
+        ) {
           const attemptId = await supabaseClient
             .from("brand_settings")
-            .upsert({ ...basePayload, id: userId }, { onConflict: "id" });
+            .upsert({ ...basePayload, id: resolvedUserId }, { onConflict: "id" });
           if (attemptId.error) throw attemptId.error;
         } else {
           throw attemptUserId.error;
@@ -390,12 +433,17 @@ export default function MidiasAppPage({
   }, [messages]);
 
   const generateFromPrompt = async (userPrompt) => {
-    if (!supabaseClient || !userId) {
+    if (!supabaseClient || !resolvedUserId) {
       setErrorMsg("Você precisa estar logado.");
       return;
     }
     if (!String(userPrompt || "").trim()) return;
     if (!canUse) return;
+
+    if (!env.geminiApiKey) {
+      setErrorMsg("Gemini não configurado. Defina VITE_GEMINI_API_KEY no deploy.");
+      return;
+    }
 
     const isTextOnly = selectedFormat === "texto";
     const creditsToConsume = isTextOnly ? 1 : 10;
@@ -409,48 +457,110 @@ export default function MidiasAppPage({
     setErrorMsg("");
 
     try {
-      // 1) chama webhook
-      const resp = await fetch(N8N_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: userId,
-          prompt: String(userPrompt).trim(),
-          format: selectedFormat,
-          brand: {
-            ...brandData,
-            reference_images: safeJsonArray(brandData.reference_images),
-          },
-        }),
-      });
+      const prompt = String(userPrompt).trim();
 
-      const json = await resp.json().catch(() => null);
-      if (!resp.ok) {
-        throw new Error(json?.error || `Webhook retornou ${resp.status}`);
+      // 1) prepara contexto de marca
+      const brandInfo = {
+        colors: Array.isArray(brandData.colors) ? brandData.colors : ["#EA580C"],
+        tone: brandData.tone_of_voice || "Profissional",
+        personality: brandData.personality || "",
+        logoUrl: brandData.logo_url || "",
+        refs: safeJsonArray(brandData.reference_images),
+      };
+
+      const formatLabels = {
+        texto: "caption only (no image)",
+        quadrado: "1:1 square image",
+        retrato_4x5: "3:4 portrait image",
+        story: "9:16 story image",
+      };
+
+      const systemInstruction = isTextOnly
+        ? `Você é um copywriter profissional. Escreva uma legenda em PT-BR para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Inclua hashtags relevantes. Não descreva imagens.`
+        : `Você é um designer profissional. Gere uma imagem ${formatLabels[selectedFormat]} para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Incorpore o logo quando fornecido e siga a estética das referências. Também escreva uma legenda em PT-BR com hashtags. Retorne imagem e texto.`;
+
+      const genAI = new GoogleGenAI({ apiKey: env.geminiApiKey });
+
+      // 2) carrega refs/branding como base64 (apenas quando precisa de imagem)
+      const lastMessageParts = [{ text: prompt }];
+
+      let logoBase64 = null;
+      let refsBase64 = [];
+
+      if (!isTextOnly) {
+        logoBase64 = brandInfo.logoUrl ? await urlToBase64(brandInfo.logoUrl) : null;
+        refsBase64 = await Promise.all((brandInfo.refs || []).map((url) => urlToBase64(url).catch(() => null)));
+
+        if (logoBase64) lastMessageParts.push({ inlineData: { mimeType: "image/png", data: logoBase64 } });
+        (refsBase64 || []).forEach((data) => {
+          if (data) lastMessageParts.push({ inlineData: { mimeType: "image/png", data } });
+        });
       }
 
-      // O fluxo responde 1 coisa por vez:
-      // - Texto: exige caption
-      // - Imagem: exige image (caption é opcional)
-      if (isTextOnly) {
-        if (!json?.caption) throw new Error("Resposta do webhook inválida para Texto. Esperado { caption }.");
-      } else {
-        if (!json?.image) throw new Error("Resposta do webhook inválida para Imagem. Esperado { image }.");
+      const imageConfigMap = {
+        quadrado: "1:1",
+        retrato_4x5: "3:4",
+        story: "9:16",
+      };
+
+      const config = {
+        systemInstruction,
+        generationConfig: {
+          responseModalities: isTextOnly ? ["TEXT"] : ["TEXT", "IMAGE"],
+        },
+        ...(isTextOnly
+          ? {}
+          : {
+              imageConfig: {
+                aspectRatio: imageConfigMap[selectedFormat] || "1:1",
+              },
+            }),
+      };
+
+      const result = await genAI.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: [{ role: "user", parts: lastMessageParts }],
+        config,
+      });
+
+      const parts = result?.candidates?.[0]?.content?.parts || [];
+      let caption = "";
+      let imageBase64 = "";
+
+      parts.forEach((part) => {
+        if (part?.text) caption += part.text;
+        if (part?.inlineData?.data) imageBase64 = part.inlineData.data;
+      });
+
+      caption = String(caption || "").trim();
+
+      let imageUrl = "";
+      if (!isTextOnly && imageBase64) {
+        const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
+        const path = `midias/${resolvedUserId}/generated-${Date.now()}.png`;
+        const { error: upErr } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, blob, {
+          contentType: "image/png",
+          upsert: true,
+        });
+        if (upErr) throw upErr;
+
+        const { data } = supabaseClient.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+        imageUrl = data?.publicUrl || "";
       }
 
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: json?.caption || "",
-          image: json?.image || "",
+          content: caption || "(sem texto)",
+          image: imageUrl,
           meta: { format: selectedFormat },
         },
       ]);
 
-      // 2) consome crédito via RPC
+      // 3) consome crédito via RPC
       const { error: rpcErr } = await supabaseClient.rpc("consume_credits", {
-        user_id_param: userId,
+        user_id_param: resolvedUserId,
         amount_to_consume: creditsToConsume,
         desc_param: isTextOnly ? "Texto (ideia/legenda)" : `Geração de imagem (${selectedFormat})`,
       });
@@ -641,7 +751,7 @@ export default function MidiasAppPage({
           <div className="p-5">
             {loading ? (
               <div className="text-sm text-muted-foreground">Carregando…</div>
-            ) : !supabaseClient || !userId ? (
+            ) : !supabaseClient || !resolvedUserId ? (
               <div className="rounded-2xl border border-border bg-background/40 p-4 text-sm text-muted-foreground">
                 Você precisa estar logado para usar este módulo.
               </div>
