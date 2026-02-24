@@ -904,7 +904,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [authView, setAuthView] = useState("landing");
 
-  // Para deploy (Vercel), usamos o SDK via npm (sem carregar via <script>), então já está disponível.
+  // Para deploy, as variáveis VITE_* precisam existir no ambiente.
   const isConfigured = Boolean(env.supabaseUrl && env.supabaseAnonKey);
 
   // Script FB SDK e Chatwoot
@@ -960,7 +960,7 @@ export default function App() {
       <div className="min-h-screen bg-gray-950 flex items-center justify-center flex-col text-white p-6 text-center">
         <ShieldAlert className="w-10 h-10 text-red-400 mb-4" />
         <h1 className="text-xl font-bold mb-2">Configuração Pendente</h1>
-        <p className="text-gray-400">Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente de deploy.</p>
+        <p className="text-gray-400">Configure VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY no ambiente de deploy.</p>
       </div>
     );
   }
