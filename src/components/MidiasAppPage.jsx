@@ -14,8 +14,7 @@ import {
   RefreshCw,
   Send,
 } from "lucide-react";
-import { GoogleGenAI } from "@google/genai";
-import { env } from "@/config/env";
+import { lovableCloudClient } from "@/lib/lovableCloudClient";
 import GeneratedArtsHistoryList from "@/components/midias/GeneratedArtsHistoryList";
 import GeneratedArtDetailsModal from "@/components/midias/GeneratedArtDetailsModal";
 
@@ -486,11 +485,6 @@ export default function MidiasAppPage({
     if (!String(userPrompt || "").trim()) return;
     if (!canUse) return;
 
-    if (!env.geminiApiKey) {
-      setErrorMsg("Gemini não configurado. Defina VITE_GEMINI_API_KEY no deploy.");
-      return;
-    }
-
     const isTextOnly = selectedFormat === "texto";
     const creditsToConsume = isTextOnly ? 1 : 10;
 
@@ -505,105 +499,67 @@ export default function MidiasAppPage({
     try {
       const prompt = String(userPrompt).trim();
 
-      // 1) prepara contexto de marca
+      // Contexto de marca (passado para o backend; prompt "de sistema" fica lá)
       const brandInfo = {
         colors: Array.isArray(brandData.colors) ? brandData.colors : ["#EA580C"],
         tone: brandData.tone_of_voice || "Profissional",
         personality: brandData.personality || "",
-        logoUrl: brandData.logo_url || "",
-        refs: safeJsonArray(brandData.reference_images),
       };
 
-      const formatLabels = {
-        texto: "caption only (no image)",
-        quadrado: "1:1 square image",
-        retrato_4x5: "3:4 portrait image",
-        story: "9:16 story image",
-      };
+      const isImage = !isTextOnly;
 
-      const systemInstruction = isTextOnly
-        ? `Você é um copywriter profissional. Escreva uma legenda em PT-BR para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Inclua hashtags relevantes. Não descreva imagens.`
-        : `Você é um designer profissional. Gere uma imagem ${formatLabels[selectedFormat]} para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Incorpore o logo quando fornecido e siga a estética das referências. Também escreva uma legenda em PT-BR com hashtags. Retorne imagem e texto.`;
-
-      const genAI = new GoogleGenAI({ apiKey: env.geminiApiKey });
-
-      // 2) carrega refs/branding como base64 (apenas quando precisa de imagem)
-      const lastMessageParts = [{ text: prompt }];
-
+      // Para imagem: envia logo + referências (base64) para orientar a estética.
       let logoBase64 = null;
       let refsBase64 = [];
-
-      if (!isTextOnly) {
-        logoBase64 = brandInfo.logoUrl ? await urlToBase64(brandInfo.logoUrl) : null;
-        refsBase64 = await Promise.all((brandInfo.refs || []).map((url) => urlToBase64(url).catch(() => null)));
-
-        if (logoBase64) lastMessageParts.push({ inlineData: { mimeType: "image/png", data: logoBase64 } });
-        (refsBase64 || []).forEach((data) => {
-          if (data) lastMessageParts.push({ inlineData: { mimeType: "image/png", data } });
-        });
+      if (isImage) {
+        logoBase64 = brandData.logo_url ? await urlToBase64(brandData.logo_url) : null;
+        refsBase64 = await Promise.all(
+          safeJsonArray(brandData.reference_images).map((url) => urlToBase64(url).catch(() => null)),
+        );
       }
 
-      const imageConfigMap = {
-        quadrado: "1:1",
-        retrato_4x5: "3:4",
-        story: "9:16",
-      };
+      if (!lovableCloudClient) {
+        throw new Error(
+          "Backend de IA não configurado. Defina VITE_LOVABLE_CLOUD_URL e VITE_LOVABLE_CLOUD_PUBLISHABLE_KEY no deploy.",
+        );
+      }
 
-      const config = {
-        systemInstruction,
-        generationConfig: {
-          responseModalities: isTextOnly ? ["TEXT"] : ["TEXT", "IMAGE"],
+      const { data: fnData, error: fnErr } = await lovableCloudClient.functions.invoke("midias-generate", {
+        body: {
+          mode: isTextOnly ? "text" : "image",
+          prompt,
+          format: selectedFormat,
+          brand: brandInfo,
+          logoBase64,
+          refsBase64,
         },
-        ...(isTextOnly
-          ? {}
-          : {
-              imageConfig: {
-                aspectRatio: imageConfigMap[selectedFormat] || "1:1",
-              },
-            }),
-      };
-
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: [{ role: "user", parts: lastMessageParts }],
-        config,
       });
 
-      const parts = result?.candidates?.[0]?.content?.parts || [];
-      let caption = "";
-      let imageBase64 = "";
-
-      parts.forEach((part) => {
-        if (part?.text) caption += part.text;
-        if (part?.inlineData?.data) imageBase64 = part.inlineData.data;
-      });
-
-      caption = String(caption || "").trim();
-
-      // Alguns modelos / prompts podem devolver JSON como texto.
-      // Aceitamos { caption, image } para compatibilidade com fluxos antigos.
-      if (caption && (caption.startsWith("{") || caption.startsWith("["))) {
-        try {
-          const parsed = JSON.parse(caption);
-          if (parsed && typeof parsed === "object") {
-            if (typeof parsed.caption === "string" && parsed.caption.trim()) caption = parsed.caption.trim();
-            if (!imageBase64 && typeof parsed.image === "string" && parsed.image.trim()) imageBase64 = parsed.image.trim();
-          }
-        } catch (_e) {
-          // ignora (não era JSON)
-        }
+      if (fnErr) {
+        // fnErr pode ter status (429/402/401 etc.)
+        const status = fnErr?.context?.status;
+        const msg =
+          status === 429
+            ? "Muitas solicitações agora. Aguarde um pouco e tente novamente."
+            : status === 402
+              ? "Limite de uso do provedor de IA atingido. Verifique os créditos do workspace."
+              : fnErr.message || "Falha ao gerar.";
+        throw new Error(msg);
       }
 
-      if (!caption && !imageBase64) {
-        throw new Error("A resposta do Gemini veio vazia. Tente novamente com um prompt mais específico.");
+      const caption = String(fnData?.caption || "").trim();
+      const imageDataUrl = String(fnData?.image || "").trim();
+
+      if (!caption && !imageDataUrl) {
+        throw new Error("A resposta veio vazia. Tente novamente com um prompt mais específico.");
       }
 
       let imageUrl = "";
-      if (!isTextOnly && imageBase64) {
-        const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
+      if (isImage && imageDataUrl) {
+        const blob = await (await fetch(imageDataUrl)).blob();
         const path = `midias/${resolvedUserId}/generated-${Date.now()}.png`;
         const { error: upErr } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, blob, {
-          contentType: "image/png",
+          contentType: blob.type || "image/png",
           upsert: true,
         });
         if (upErr) throw upErr;
@@ -622,7 +578,7 @@ export default function MidiasAppPage({
         },
       ]);
 
-      // 3) consome crédito via RPC
+      // Consome crédito via RPC (mantém regra atual)
       const { error: rpcErr } = await supabaseClient.rpc("consume_credits", {
         user_id_param: resolvedUserId,
         amount_to_consume: creditsToConsume,
@@ -630,8 +586,7 @@ export default function MidiasAppPage({
       });
       if (rpcErr) throw rpcErr;
 
-
-      // 4) salva no histórico do gerador
+      // Salva no histórico
       try {
         const { error: insErr } = await supabaseClient.from("generated_arts").insert({
           user_id: resolvedUserId,
@@ -642,12 +597,10 @@ export default function MidiasAppPage({
         });
         if (insErr) throw insErr;
       } catch (saveErr) {
-        // não bloqueia o usuário se falhar salvar; apenas avisa.
         console.warn("Falha ao salvar em generated_arts:", saveErr);
       }
 
       await loadAll();
-
     } catch (e) {
       setErrorMsg(formatError(e));
     } finally {
