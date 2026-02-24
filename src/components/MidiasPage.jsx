@@ -53,7 +53,7 @@ export default function MidiasPage({ onOpenPlansTab, onOpenMidiasApp, hasMediaUp
   };
 
   return (
-    <main className="max-w-6xl mx-auto px-4 animate-in fade-in">
+    <main className="max-w-5xl mx-auto animate-in fade-in">
       <header className="mb-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -142,20 +142,14 @@ export default function MidiasPage({ onOpenPlansTab, onOpenMidiasApp, hasMediaUp
           </div>
 
           <div className="border-t border-border p-4 bg-background/40">
-            <form onSubmit={handleSend} className="flex items-end gap-2">
-              <textarea
+            <form onSubmit={handleSend} className="flex gap-2">
+              <input
+                type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 disabled={!hasMediaUpgrade}
-                rows={1}
                 placeholder={hasMediaUpgrade ? "Digite sua mensagem..." : "Upgrade necessário para usar esta ferramenta"}
-                className="flex-1 rounded-2xl border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    handleSend(e);
-                  }
-                }}
+                className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <button
                 type="submit"
@@ -165,7 +159,6 @@ export default function MidiasPage({ onOpenPlansTab, onOpenMidiasApp, hasMediaUp
                 <Send className="w-4 h-4" />
               </button>
             </form>
-            <div className="mt-2 text-[11px] text-muted-foreground">Enter: nova linha • Ctrl/Cmd+Enter: enviar</div>
           </div>
         </div>
       </section>
