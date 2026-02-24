@@ -13,6 +13,8 @@ import {
   AlertCircle,
   RefreshCw,
   Send,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { lovableCloudClient } from "@/lib/lovableCloudClient";
 import GeneratedArtsHistoryList from "@/components/midias/GeneratedArtsHistoryList";
@@ -174,7 +176,9 @@ export default function MidiasAppPage({
     },
   ]);
   const [inputValue, setInputValue] = useState("");
+  const [inputExpanded, setInputExpanded] = useState(true);
   const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const [selectedFormat, setSelectedFormat] = useState("quadrado");
   const [generating, setGenerating] = useState(false);
@@ -477,6 +481,25 @@ export default function MidiasAppPage({
     scrollToBottom();
   }, [messages]);
 
+  // Auto-resize do textarea (quando expandido)
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    // Quando recolhido, mantém altura compacta.
+    if (!inputExpanded) {
+      el.style.height = "40px";
+      el.style.overflowY = "hidden";
+      return;
+    }
+
+    // Reset → mede scrollHeight → aplica (com teto)
+    el.style.height = "0px";
+    const next = Math.min(160, Math.max(40, el.scrollHeight));
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+  }, [inputValue, inputExpanded]);
+
   const generateFromPrompt = async (userPrompt) => {
     if (!supabaseClient || !resolvedUserId) {
       setErrorMsg("Você precisa estar logado.");
@@ -520,7 +543,7 @@ export default function MidiasAppPage({
 
       if (!lovableCloudClient) {
         throw new Error(
-          "Backend de IA não configurado. Defina VITE_LOVABLE_CLOUD_URL e VITE_LOVABLE_CLOUD_PUBLISHABLE_KEY no deploy.",
+          "Backend de IA não configurado no deploy. Verifique as variáveis do projeto (VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY).",
         );
       }
 
@@ -668,7 +691,7 @@ export default function MidiasAppPage({
   }
 
   return (
-    <main className="max-w-6xl mx-auto animate-in fade-in">
+    <main className="max-w-[1400px] mx-auto px-4 animate-in fade-in">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
@@ -722,7 +745,7 @@ export default function MidiasAppPage({
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left: main */}
-        <section className="lg:flex-1 rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
+        <section className="lg:flex-[1.35] rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
           <div className="p-5 border-b border-border flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-xl border border-border bg-background/40 flex items-center justify-center">
@@ -1141,15 +1164,43 @@ export default function MidiasAppPage({
                     </div>
 
                     <div className="border-t border-border p-4 bg-background/40">
-                      <form onSubmit={handleSend} className="flex gap-2">
-                        <input
-                          type="text"
-                          value={inputValue}
-                          onChange={(e) => setInputValue(e.target.value)}
-                          disabled={!canUse}
-                          placeholder={canUse ? "Ex.: post com oferta de avaliação + CTA no WhatsApp" : "Upgrade necessário"}
-                          className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                        />
+                      <form onSubmit={handleSend} className="flex items-end gap-2">
+                        <div className="flex-1">
+                          <textarea
+                            ref={textareaRef}
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              // Enter = quebra linha (padrão). Enviar: Ctrl/Cmd+Enter.
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                handleSend(e);
+                              }
+                            }}
+                            disabled={!canUse}
+                            rows={1}
+                            placeholder={
+                              canUse
+                                ? "Ex.: post com oferta de avaliação + CTA no WhatsApp (Ctrl/Cmd+Enter para enviar)"
+                                : "Upgrade necessário"
+                            }
+                            className="w-full rounded-2xl border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed"
+                            style={{ height: inputExpanded ? undefined : 40 }}
+                          />
+
+                          <div className="mt-2 flex items-center justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setInputExpanded((v) => !v)}
+                              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              title={inputExpanded ? "Recolher caixa de texto" : "Expandir caixa de texto"}
+                            >
+                              {inputExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                              {inputExpanded ? "Recolher" : "Expandir"}
+                            </button>
+                            <div className="text-[11px] text-muted-foreground whitespace-nowrap">Enter: nova linha • Ctrl/Cmd+Enter: enviar</div>
+                          </div>
+                        </div>
                         <button
                           type="submit"
                           disabled={!canUse || generating || !inputValue.trim()}
@@ -1168,7 +1219,7 @@ export default function MidiasAppPage({
         </section>
 
         {/* Right: tips */}
-        <aside className="lg:w-[360px] space-y-6">
+        <aside className="lg:w-[320px] space-y-6">
           <div className="rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-5">
             <div className="text-sm font-semibold text-foreground">Boas práticas</div>
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
