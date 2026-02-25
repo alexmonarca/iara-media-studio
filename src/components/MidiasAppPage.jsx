@@ -10,6 +10,9 @@ import {
   Monitor,
   Smartphone,
   MessageSquare,
+  Type,
+  Square,
+  RectangleVertical,
   AlertCircle,
   RefreshCw,
   Send,
@@ -1081,134 +1084,197 @@ export default function MidiasAppPage({
               </div>
             ) : (
               <div className="space-y-5">
-                <div className="rounded-3xl border border-border bg-background/40 p-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-foreground">Formato</div>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {selectedFormat === "texto" ? "Ideia/legenda" : "Imagem + legenda"} ·{" "}
-                        <span className="text-foreground">
-                          {selectedFormat === "texto" ? "1 crédito" : "10 créditos"}
-                        </span>
-                      </p>
+                {/* Top bar (igual ao app /midias) */}
+                <div className="rounded-full border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="h-10 w-10 rounded-2xl border border-border bg-background/40 flex items-center justify-center flex-shrink-0">
+                      <Sparkles className="w-5 h-5 text-primary" />
                     </div>
-
-                    <div className="text-xs text-muted-foreground">
-                      {brandData.logo_url ? "Logo configurado" : "Sem logo"} · {brandData.reference_images.length}/3 refs
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-foreground truncate">Geração Criativa</div>
+                      <div className="text-[11px] uppercase tracking-widest text-muted-foreground truncate">AI Powered Engine</div>
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {formats.map((f) => {
-                      const Icon = f.icon;
-                      const active = selectedFormat === f.id;
-                      return (
-                        <button
-                          key={f.id}
-                          type="button"
-                          onClick={() => setSelectedFormat(f.id)}
-                          className={
-                            "group relative overflow-hidden rounded-2xl border p-3 text-left transition-colors " +
-                            (active
-                              ? "border-primary/40 bg-primary/10"
-                              : "border-border bg-card/40 hover:bg-card/60")
-                          }
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className={"text-sm font-semibold truncate " + (active ? "text-foreground" : "text-foreground")}>{f.label}</div>
-                              <div className="mt-1 text-[11px] text-muted-foreground">
-                                {f.id === "texto"
-                                  ? "Só texto"
-                                  : f.id === "story"
-                                    ? "9:16"
-                                    : f.id === "retrato_4x5"
-                                      ? "3:4"
-                                      : "1:1"}
-                              </div>
-                            </div>
-                            <div
-                              className={
-                                "h-9 w-9 rounded-2xl border flex items-center justify-center transition-colors " +
-                                (active
-                                  ? "border-primary/30 bg-primary/10 text-primary"
-                                  : "border-border bg-background/40 text-muted-foreground group-hover:text-foreground")
-                              }
-                            >
-                              <Icon className="w-4 h-4" />
-                            </div>
-                          </div>
-
-                          {active && <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]" />}
-                        </button>
-                      );
-                    })}
+                  <div className="flex-1 flex justify-center">
+                    <div className="rounded-full border border-border bg-background/30 p-1 flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("gerar")}
+                        className={
+                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
+                          (activeTab === "gerar"
+                            ? "bg-primary text-primary-foreground shadow-[0_10px_40px_-20px_hsl(var(--primary)/0.6)]"
+                            : "text-muted-foreground hover:text-foreground")
+                        }
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        Gerar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("marca")}
+                        className={
+                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
+                          (activeTab === "marca" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")
+                        }
+                      >
+                        <Palette className="w-4 h-4" />
+                        Marca
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("historico")}
+                        className={
+                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
+                          (activeTab === "historico"
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground")
+                        }
+                      >
+                        <HistoryIcon className="w-4 h-4" />
+                        Histórico
+                      </button>
+                    </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={loadAll}
+                    className="h-10 w-10 rounded-full border border-border bg-background/40 text-foreground hover:bg-background/60 transition-colors inline-flex items-center justify-center flex-shrink-0"
+                    title="Recarregar"
+                  >
+                    <RefreshCw className={"w-4 h-4 " + (loading ? "animate-spin" : "")} />
+                  </button>
                 </div>
 
-                <section className="rounded-3xl border border-border bg-card/60 overflow-hidden">
-                  <div className="p-4 border-b border-border">
-                    <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-2xl border border-border bg-background/40 flex items-center justify-center">
-                        <Sparkles className="w-4 h-4 text-primary" />
+                {/* Formato */}
+                <div className="rounded-3xl border border-border bg-card/60 overflow-hidden">
+                  <div className="p-5 border-b border-border">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="text-xs uppercase tracking-widest text-muted-foreground">Selecione o formato</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground">
+                          Consumo: <span className="text-foreground font-semibold">{selectedFormat === "texto" ? "1" : "10"} créditos</span>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h2 className="text-base font-semibold text-foreground truncate">Gerar</h2>
-                        <p className="text-xs text-muted-foreground truncate">
-                          Descreva o post e eu retorno {selectedFormat === "texto" ? "uma ideia/legenda" : "a arte + legenda"}.
-                        </p>
+
+                      <div className="text-[11px] uppercase tracking-widest text-muted-foreground">
+                        {brandData.logo_url ? "Logo ativa ✓" : "Logo ausente"} · {brandData.reference_images.length}/3 referências
                       </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {(() => {
+                        const items = [
+                          { id: "texto", label: "Texto IA", icon: Type, meta: "só texto" },
+                          { id: "quadrado", label: "Quadrado", icon: Square, meta: "1:1" },
+                          { id: "retrato_4x5", label: "Retrato (4:5)", icon: RectangleVertical, meta: "3:4" },
+                          { id: "story", label: "Story (9:16)", icon: Smartphone, meta: "9:16" },
+                        ];
+                        return items.map((it) => {
+                          const active = selectedFormat === it.id;
+                          const Icon = it.icon;
+                          return (
+                            <button
+                              key={it.id}
+                              type="button"
+                              onClick={() => setSelectedFormat(it.id)}
+                              className={
+                                "h-12 px-4 rounded-2xl border text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
+                                (active
+                                  ? "border-primary/40 bg-primary/10 text-foreground"
+                                  : "border-border bg-background/30 text-muted-foreground hover:bg-background/50 hover:text-foreground")
+                              }
+                            >
+                              <Icon className={"w-4 h-4 " + (active ? "text-primary" : "")} />
+                              {it.label}
+                              <span className={"ml-1 text-[11px] font-medium " + (active ? "text-muted-foreground" : "text-muted-foreground")}>({it.meta})</span>
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
 
-                  <div className="flex flex-col h-[70vh] md:h-[560px]">
-                    <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
-                      {messages.map((msg, idx) => (
-                        <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div
-                            className={`max-w-[82%] rounded-2xl px-4 py-3 space-y-3 ${
-                              msg.role === "user"
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted/50 text-foreground border border-border"
-                            }`}
-                          >
-                            {msg.image ? (
-                              <img
-                                src={msg.image}
-                                alt="Imagem gerada"
-                                className="w-full max-h-[420px] object-contain rounded-xl border border-border bg-background"
-                                loading="lazy"
-                              />
-                            ) : null}
-                            {msg.content ? <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p> : null}
+                  {/* Chat */}
+                  <div className="p-5">
+                    <section className="rounded-3xl border border-border bg-background/30 overflow-hidden">
+                      <div className="p-4 border-b border-border flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-10 w-10 rounded-2xl border border-border bg-background/40 flex items-center justify-center">
+                            <Sparkles className="w-5 h-5 text-primary" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-foreground truncate">Assistente Criativo</div>
+                            <div className="text-[11px] uppercase tracking-widest text-muted-foreground truncate">
+                              Conversational AI Interface
+                            </div>
                           </div>
                         </div>
-                      ))}
-                      <div ref={messagesEndRef} />
-                    </div>
 
-                    <div className="border-t border-border p-4 bg-background/40">
-                      <form onSubmit={handleSend} className="flex gap-2">
-                        <input
-                          type="text"
-                          value={inputValue}
-                          onChange={(e) => setInputValue(e.target.value)}
-                          disabled={!canUse}
-                          placeholder={canUse ? "Ex.: post com oferta de avaliação + CTA no WhatsApp" : "Upgrade necessário"}
-                          className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!canUse || generating || !inputValue.trim()}
-                          className="h-10 w-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Enviar"
-                        >
-                          {generating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                        </button>
-                      </form>
-                    </div>
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-success" aria-hidden />
+                          <span className="text-[11px] uppercase tracking-widest text-success">Online</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col h-[70vh] md:h-[560px]">
+                        <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
+                          {messages.map((msg, idx) => (
+                            <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                              <div
+                                className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
+                                  msg.role === "user"
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-card/60 text-foreground border border-border"
+                                }`}
+                              >
+                                {msg.image ? (
+                                  <img
+                                    src={msg.image}
+                                    alt="Imagem gerada"
+                                    className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
+                                    loading="lazy"
+                                  />
+                                ) : null}
+                                {msg.content ? (
+                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                          <div ref={messagesEndRef} />
+                        </div>
+
+                        <div className="border-t border-border p-4 bg-background/40">
+                          <form onSubmit={handleSend} className="flex items-center gap-3">
+                            <input
+                              type="text"
+                              value={inputValue}
+                              onChange={(e) => setInputValue(e.target.value)}
+                              disabled={!canUse}
+                              placeholder={
+                                canUse
+                                  ? "Descreva sua ideia com detalhes… (ex: Post elegante para joalheria)"
+                                  : "Upgrade necessário"
+                              }
+                              className="flex-1 h-14 rounded-full border border-border bg-background/40 px-6 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!canUse || generating || !inputValue.trim()}
+                              className="h-14 w-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Enviar"
+                            >
+                              {generating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                    </section>
                   </div>
-                </section>
+                </div>
               </div>
             )}
           </div>
