@@ -1084,69 +1084,7 @@ export default function MidiasAppPage({
               </div>
             ) : (
               <div className="space-y-5">
-                {/* Top bar (igual ao app /midias) */}
-                <div className="rounded-full border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-3 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="h-10 w-10 rounded-2xl border border-border bg-background/40 flex items-center justify-center flex-shrink-0">
-                      <Sparkles className="w-5 h-5 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-foreground truncate">Geração Criativa</div>
-                      <div className="text-[11px] uppercase tracking-widest text-muted-foreground truncate">AI Powered Engine</div>
-                    </div>
-                  </div>
-
-                  <div className="flex-1 flex justify-center">
-                    <div className="rounded-full border border-border bg-background/30 p-1 flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab("gerar")}
-                        className={
-                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
-                          (activeTab === "gerar"
-                            ? "bg-primary text-primary-foreground shadow-[0_10px_40px_-20px_hsl(var(--primary)/0.6)]"
-                            : "text-muted-foreground hover:text-foreground")
-                        }
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        Gerar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab("marca")}
-                        className={
-                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
-                          (activeTab === "marca" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")
-                        }
-                      >
-                        <Palette className="w-4 h-4" />
-                        Marca
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab("historico")}
-                        className={
-                          "h-10 px-5 rounded-full text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
-                          (activeTab === "historico"
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:text-foreground")
-                        }
-                      >
-                        <HistoryIcon className="w-4 h-4" />
-                        Histórico
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={loadAll}
-                    className="h-10 w-10 rounded-full border border-border bg-background/40 text-foreground hover:bg-background/60 transition-colors inline-flex items-center justify-center flex-shrink-0"
-                    title="Recarregar"
-                  >
-                    <RefreshCw className={"w-4 h-4 " + (loading ? "animate-spin" : "")} />
-                  </button>
-                </div>
+                {/* (removido) Top bar duplicado dentro da aba Gerar */}
 
                 {/* Formato */}
                 <div className="rounded-3xl border border-border bg-card/60 overflow-hidden">
@@ -1220,46 +1158,63 @@ export default function MidiasAppPage({
                       </div>
 
                       <div className="flex flex-col h-[70vh] md:h-[560px]">
-                        <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
-                          {messages.map((msg, idx) => (
-                            <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                              <div
-                                className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
-                                  msg.role === "user"
-                                    ? "bg-primary text-primary-foreground"
-                                    : "bg-card/60 text-foreground border border-border"
-                                }`}
-                              >
-                                {msg.image ? (
-                                  <img
-                                    src={msg.image}
-                                    alt="Imagem gerada"
-                                    className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
-                                    loading="lazy"
-                                  />
-                                ) : null}
-                                {msg.content ? (
-                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                ) : null}
+                        <div className="flex-1 overflow-y-auto p-5 chat-scroll">
+                          {/* Mantém o input “colado” às mensagens quando houver poucas */}
+                          <div className="min-h-full flex flex-col justify-end gap-4">
+                            {messages.map((msg, idx) => (
+                              <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                                <div
+                                  className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
+                                    msg.role === "user"
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-card/60 text-foreground border border-border"
+                                  }`}
+                                >
+                                  {msg.image ? (
+                                    <img
+                                      src={msg.image}
+                                      alt="Imagem gerada"
+                                      className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
+                                      loading="lazy"
+                                    />
+                                  ) : null}
+                                  {msg.content ? (
+                                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                  ) : null}
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                          <div ref={messagesEndRef} />
+                            ))}
+                            <div ref={messagesEndRef} />
+                          </div>
                         </div>
 
                         <div className="border-t border-border p-4 bg-background/40">
-                          <form onSubmit={handleSend} className="flex items-center gap-3">
-                            <input
-                              type="text"
+                          <form onSubmit={handleSend} className="flex items-end gap-3">
+                            <textarea
+                              rows={1}
                               value={inputValue}
                               onChange={(e) => setInputValue(e.target.value)}
+                              onInput={(e) => {
+                                // auto-resize
+                                const el = e.currentTarget;
+                                el.style.height = "0px";
+                                el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+                              }}
+                              onKeyDown={(e) => {
+                                if (!canUse) return;
+                                // Envia com Enter, quebra linha com Shift+Enter
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleSend(e);
+                                }
+                              }}
                               disabled={!canUse}
                               placeholder={
                                 canUse
                                   ? "Descreva sua ideia com detalhes… (ex: Post elegante para joalheria)"
                                   : "Upgrade necessário"
                               }
-                              className="flex-1 h-14 rounded-full border border-border bg-background/40 px-6 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex-1 min-h-14 max-h-[240px] rounded-3xl border border-border bg-background/40 px-6 py-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed overflow-y-auto"
                             />
                             <button
                               type="submit"
@@ -1267,9 +1222,16 @@ export default function MidiasAppPage({
                               className="h-14 w-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Enviar"
                             >
-                              {generating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                              {generating ? (
+                                <RefreshCw className="w-5 h-5 animate-spin" />
+                              ) : (
+                                <Send className="w-5 h-5" />
+                              )}
                             </button>
                           </form>
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            Enter para enviar • Shift+Enter para nova linha
+                          </div>
                         </div>
                       </div>
                     </section>
