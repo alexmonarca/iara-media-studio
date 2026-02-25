@@ -1157,35 +1157,37 @@ export default function MidiasAppPage({
                         </div>
                       </div>
 
-                      <div className="flex flex-col h-[70vh] md:h-[560px]">
-                        <div className="flex-1 overflow-y-auto p-5 chat-scroll">
-                          {/* Mantém o input “colado” às mensagens quando houver poucas */}
-                          <div className="min-h-full flex flex-col justify-end gap-4">
-                            {messages.map((msg, idx) => (
-                              <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                                <div
-                                  className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
-                                    msg.role === "user"
-                                      ? "bg-primary text-primary-foreground"
-                                      : "bg-card/60 text-foreground border border-border"
-                                  }`}
-                                >
-                                  {msg.image ? (
-                                    <img
-                                      src={msg.image}
-                                      alt="Imagem gerada"
-                                      className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
-                                      loading="lazy"
-                                    />
-                                  ) : null}
-                                  {msg.content ? (
-                                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                  ) : null}
-                                </div>
+                      <div
+                        className={
+                          "flex flex-col " +
+                          (messages.length <= 2 ? "h-[460px] md:h-[440px]" : "h-[70vh] md:h-[560px]")
+                        }
+                      >
+                        <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
+                          {messages.map((msg, idx) => (
+                            <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                              <div
+                                className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
+                                  msg.role === "user"
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-card/60 text-foreground border border-border"
+                                }`}
+                              >
+                                {msg.image ? (
+                                  <img
+                                    src={msg.image}
+                                    alt="Imagem gerada"
+                                    className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
+                                    loading="lazy"
+                                  />
+                                ) : null}
+                                {msg.content ? (
+                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                ) : null}
                               </div>
-                            ))}
-                            <div ref={messagesEndRef} />
-                          </div>
+                            </div>
+                          ))}
+                          <div ref={messagesEndRef} />
                         </div>
 
                         <div className="border-t border-border p-4 bg-background/40">
