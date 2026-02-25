@@ -10,15 +10,13 @@ import {
   Monitor,
   Smartphone,
   MessageSquare,
-  Type,
-  Square,
-  RectangleVertical,
   AlertCircle,
   RefreshCw,
   Send,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
-import { GoogleGenAI } from "@google/genai";
-import { env } from "@/config/env";
+import { lovableCloudClient } from "@/lib/lovableCloudClient";
 import GeneratedArtsHistoryList from "@/components/midias/GeneratedArtsHistoryList";
 import GeneratedArtDetailsModal from "@/components/midias/GeneratedArtDetailsModal";
 
@@ -117,9 +115,7 @@ function safeJsonArray(value) {
 
   // Já é array (json/jsonb no banco)
   if (Array.isArray(value)) {
-    return value
-      .map((v) => (typeof v === "string" ? v.trim() : ""))
-      .filter(Boolean);
+    return value.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
   }
 
   // Vem como string (ex.: "[\"url1\",\"url2\"]" em coluna TEXT)
@@ -130,9 +126,7 @@ function safeJsonArray(value) {
     try {
       const parsed = JSON.parse(trimmed);
       if (Array.isArray(parsed)) {
-        return parsed
-          .map((v) => (typeof v === "string" ? v.trim() : ""))
-          .filter(Boolean);
+        return parsed.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
       }
     } catch (_e) {
       // fallback: tenta quebrar por vírgula caso venha "url1,url2"
@@ -174,11 +168,13 @@ export default function MidiasAppPage({
     {
       role: "assistant",
       content:
-        "Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba \"Marca\".",
+        'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".',
     },
   ]);
   const [inputValue, setInputValue] = useState("");
+  const [inputExpanded, setInputExpanded] = useState(true);
   const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
 
   const [selectedFormat, setSelectedFormat] = useState("quadrado");
   const [generating, setGenerating] = useState(false);
@@ -481,6 +477,25 @@ export default function MidiasAppPage({
     scrollToBottom();
   }, [messages]);
 
+  // Auto-resize do textarea (quando expandido)
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    // Quando recolhido, mantém altura compacta.
+    if (!inputExpanded) {
+      el.style.height = "40px";
+      el.style.overflowY = "hidden";
+      return;
+    }
+
+    // Reset → mede scrollHeight → aplica (com teto)
+    el.style.height = "0px";
+    const next = Math.min(160, Math.max(40, el.scrollHeight));
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+  }, [inputValue, inputExpanded]);
+
   const generateFromPrompt = async (userPrompt) => {
     if (!supabaseClient || !resolvedUserId) {
       setErrorMsg("Você precisa estar logado.");
@@ -488,11 +503,6 @@ export default function MidiasAppPage({
     }
     if (!String(userPrompt || "").trim()) return;
     if (!canUse) return;
-
-    if (!env.geminiApiKey) {
-      setErrorMsg("Gemini não configurado. Defina VITE_GEMINI_API_KEY no deploy.");
-      return;
-    }
 
     const isTextOnly = selectedFormat === "texto";
     const creditsToConsume = isTextOnly ? 1 : 10;
@@ -508,105 +518,67 @@ export default function MidiasAppPage({
     try {
       const prompt = String(userPrompt).trim();
 
-      // 1) prepara contexto de marca
+      // Contexto de marca (passado para o backend; prompt "de sistema" fica lá)
       const brandInfo = {
         colors: Array.isArray(brandData.colors) ? brandData.colors : ["#EA580C"],
         tone: brandData.tone_of_voice || "Profissional",
         personality: brandData.personality || "",
-        logoUrl: brandData.logo_url || "",
-        refs: safeJsonArray(brandData.reference_images),
       };
 
-      const formatLabels = {
-        texto: "caption only (no image)",
-        quadrado: "1:1 square image",
-        retrato_4x5: "3:4 portrait image",
-        story: "9:16 story image",
-      };
+      const isImage = !isTextOnly;
 
-      const systemInstruction = isTextOnly
-        ? `Você é um copywriter profissional. Escreva uma legenda em PT-BR para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Inclua hashtags relevantes. Não descreva imagens.`
-        : `Você é um designer profissional. Gere uma imagem ${formatLabels[selectedFormat]} para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Incorpore o logo quando fornecido e siga a estética das referências. Também escreva uma legenda em PT-BR com hashtags. Retorne imagem e texto.`;
-
-      const genAI = new GoogleGenAI({ apiKey: env.geminiApiKey });
-
-      // 2) carrega refs/branding como base64 (apenas quando precisa de imagem)
-      const lastMessageParts = [{ text: prompt }];
-
+      // Para imagem: envia logo + referências (base64) para orientar a estética.
       let logoBase64 = null;
       let refsBase64 = [];
-
-      if (!isTextOnly) {
-        logoBase64 = brandInfo.logoUrl ? await urlToBase64(brandInfo.logoUrl) : null;
-        refsBase64 = await Promise.all((brandInfo.refs || []).map((url) => urlToBase64(url).catch(() => null)));
-
-        if (logoBase64) lastMessageParts.push({ inlineData: { mimeType: "image/png", data: logoBase64 } });
-        (refsBase64 || []).forEach((data) => {
-          if (data) lastMessageParts.push({ inlineData: { mimeType: "image/png", data } });
-        });
+      if (isImage) {
+        logoBase64 = brandData.logo_url ? await urlToBase64(brandData.logo_url) : null;
+        refsBase64 = await Promise.all(
+          safeJsonArray(brandData.reference_images).map((url) => urlToBase64(url).catch(() => null)),
+        );
       }
 
-      const imageConfigMap = {
-        quadrado: "1:1",
-        retrato_4x5: "3:4",
-        story: "9:16",
-      };
+      if (!lovableCloudClient) {
+        throw new Error(
+          "Backend de IA não configurado no deploy. Verifique as variáveis do projeto (VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY).",
+        );
+      }
 
-      const config = {
-        systemInstruction,
-        generationConfig: {
-          responseModalities: isTextOnly ? ["TEXT"] : ["TEXT", "IMAGE"],
+      const { data: fnData, error: fnErr } = await lovableCloudClient.functions.invoke("midias-generate", {
+        body: {
+          mode: isTextOnly ? "text" : "image",
+          prompt,
+          format: selectedFormat,
+          brand: brandInfo,
+          logoBase64,
+          refsBase64,
         },
-        ...(isTextOnly
-          ? {}
-          : {
-              imageConfig: {
-                aspectRatio: imageConfigMap[selectedFormat] || "1:1",
-              },
-            }),
-      };
-
-      const result = await genAI.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: [{ role: "user", parts: lastMessageParts }],
-        config,
       });
 
-      const parts = result?.candidates?.[0]?.content?.parts || [];
-      let caption = "";
-      let imageBase64 = "";
-
-      parts.forEach((part) => {
-        if (part?.text) caption += part.text;
-        if (part?.inlineData?.data) imageBase64 = part.inlineData.data;
-      });
-
-      caption = String(caption || "").trim();
-
-      // Alguns modelos / prompts podem devolver JSON como texto.
-      // Aceitamos { caption, image } para compatibilidade com fluxos antigos.
-      if (caption && (caption.startsWith("{") || caption.startsWith("["))) {
-        try {
-          const parsed = JSON.parse(caption);
-          if (parsed && typeof parsed === "object") {
-            if (typeof parsed.caption === "string" && parsed.caption.trim()) caption = parsed.caption.trim();
-            if (!imageBase64 && typeof parsed.image === "string" && parsed.image.trim()) imageBase64 = parsed.image.trim();
-          }
-        } catch (_e) {
-          // ignora (não era JSON)
-        }
+      if (fnErr) {
+        // fnErr pode ter status (429/402/401 etc.)
+        const status = fnErr?.context?.status;
+        const msg =
+          status === 429
+            ? "Muitas solicitações agora. Aguarde um pouco e tente novamente."
+            : status === 402
+              ? "Limite de uso do provedor de IA atingido. Verifique os créditos do workspace."
+              : fnErr.message || "Falha ao gerar.";
+        throw new Error(msg);
       }
 
-      if (!caption && !imageBase64) {
-        throw new Error("A resposta do Gemini veio vazia. Tente novamente com um prompt mais específico.");
+      const caption = String(fnData?.caption || "").trim();
+      const imageDataUrl = String(fnData?.image || "").trim();
+
+      if (!caption && !imageDataUrl) {
+        throw new Error("A resposta veio vazia. Tente novamente com um prompt mais específico.");
       }
 
       let imageUrl = "";
-      if (!isTextOnly && imageBase64) {
-        const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
+      if (isImage && imageDataUrl) {
+        const blob = await (await fetch(imageDataUrl)).blob();
         const path = `midias/${resolvedUserId}/generated-${Date.now()}.png`;
         const { error: upErr } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, blob, {
-          contentType: "image/png",
+          contentType: blob.type || "image/png",
           upsert: true,
         });
         if (upErr) throw upErr;
@@ -625,7 +597,7 @@ export default function MidiasAppPage({
         },
       ]);
 
-      // 3) consome crédito via RPC
+      // Consome crédito via RPC (mantém regra atual)
       const { error: rpcErr } = await supabaseClient.rpc("consume_credits", {
         user_id_param: resolvedUserId,
         amount_to_consume: creditsToConsume,
@@ -633,8 +605,7 @@ export default function MidiasAppPage({
       });
       if (rpcErr) throw rpcErr;
 
-
-      // 4) salva no histórico do gerador
+      // Salva no histórico
       try {
         const { error: insErr } = await supabaseClient.from("generated_arts").insert({
           user_id: resolvedUserId,
@@ -645,12 +616,10 @@ export default function MidiasAppPage({
         });
         if (insErr) throw insErr;
       } catch (saveErr) {
-        // não bloqueia o usuário se falhar salvar; apenas avisa.
         console.warn("Falha ao salvar em generated_arts:", saveErr);
       }
 
       await loadAll();
-
     } catch (e) {
       setErrorMsg(formatError(e));
     } finally {
@@ -699,7 +668,8 @@ export default function MidiasAppPage({
               <div className="text-sm font-semibold text-foreground">Créditos necessários</div>
               <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
                 Para usar o <strong className="text-foreground">Gestor de Mídias</strong>, selecione um pacote em{" "}
-                <strong className="text-foreground">Assinatura → Créditos adicionais</strong> ou adicione créditos ao seu saldo.
+                <strong className="text-foreground">Assinatura → Créditos adicionais</strong> ou adicione créditos ao
+                seu saldo.
               </p>
               {onOpenPlansTab && (
                 <button
@@ -718,7 +688,7 @@ export default function MidiasAppPage({
   }
 
   return (
-    <main className="max-w-6xl mx-auto animate-in fade-in">
+    <main className="max-w-[1400px] mx-auto px-4 animate-in fade-in">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
@@ -726,22 +696,22 @@ export default function MidiasAppPage({
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">Gere criativos e legendas com base na sua marca.</p>
         </div>
-          <div className="flex items-center gap-2">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/40 px-4 h-10">
-              <CreditCard className="w-4 h-4 text-primary" />
-              <span className="text-sm text-foreground">Créditos:</span>
-              <span className="text-sm font-semibold text-foreground">{credits}</span>
-              {onOpenPlansTab && (
-                <button
-                  type="button"
-                  onClick={onOpenPlansTab}
-                  className="ml-2 text-xs font-semibold text-primary hover:underline"
-                  title="Comprar créditos adicionais"
-                >
-                  Adicionar
-                </button>
-              )}
-            </div>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/40 px-4 h-10">
+            <CreditCard className="w-4 h-4 text-primary" />
+            <span className="text-sm text-foreground">Créditos:</span>
+            <span className="text-sm font-semibold text-foreground">{credits}</span>
+            {onOpenPlansTab && (
+              <button
+                type="button"
+                onClick={onOpenPlansTab}
+                className="ml-2 text-xs font-semibold text-primary hover:underline"
+                title="Comprar créditos adicionais"
+              >
+                Adicionar
+              </button>
+            )}
+          </div>
           {onBack && (
             <button
               type="button"
@@ -758,8 +728,8 @@ export default function MidiasAppPage({
         <div className="mb-4 rounded-2xl border border-border bg-muted/30 p-4 text-sm text-foreground">
           <div className="font-semibold">Pacote selecionado — aguardando créditos</div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Assim que os créditos entrarem no saldo, o chat libera automaticamente. Enquanto isso, você pode revisar sua Marca
-            e histórico.
+            Assim que os créditos entrarem no saldo, o chat libera automaticamente. Enquanto isso, você pode revisar sua
+            Marca e histórico.
           </p>
         </div>
       )}
@@ -772,7 +742,7 @@ export default function MidiasAppPage({
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left: main */}
-        <section className="lg:flex-1 rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
+        <section className="lg:flex-[1.35] rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
           <div className="p-5 border-b border-border flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-xl border border-border bg-background/40 flex items-center justify-center">
@@ -920,7 +890,10 @@ export default function MidiasAppPage({
                             className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 h-9 text-xs text-foreground hover:bg-card"
                             title="Remover"
                           >
-                            <span className="h-4 w-4 rounded-full border border-border" style={{ backgroundColor: c }} />
+                            <span
+                              className="h-4 w-4 rounded-full border border-border"
+                              style={{ backgroundColor: c }}
+                            />
                             {c}
                             <Trash2 className="w-3.5 h-3.5 opacity-70" />
                           </button>
@@ -958,7 +931,8 @@ export default function MidiasAppPage({
                             "Inspirador",
                             "Premium",
                           ];
-                          const isCustom = Boolean(brandData.tone_of_voice) && !presets.includes(brandData.tone_of_voice);
+                          const isCustom =
+                            Boolean(brandData.tone_of_voice) && !presets.includes(brandData.tone_of_voice);
                           const selectValue = isCustom ? "__custom__" : brandData.tone_of_voice;
 
                           return (
@@ -1084,168 +1058,181 @@ export default function MidiasAppPage({
               </div>
             ) : (
               <div className="space-y-5">
-                {/* (removido) Top bar duplicado dentro da aba Gerar */}
-
-                {/* Formato */}
-                <div className="rounded-3xl border border-border bg-card/60 overflow-hidden">
-                  <div className="p-5 border-b border-border">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <div className="text-xs uppercase tracking-widest text-muted-foreground">Selecione o formato</div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">
-                          Consumo: <span className="text-foreground font-semibold">{selectedFormat === "texto" ? "1" : "10"} créditos</span>
-                        </div>
-                      </div>
-
-                      <div className="text-[11px] uppercase tracking-widest text-muted-foreground">
-                        {brandData.logo_url ? "Logo ativa ✓" : "Logo ausente"} · {brandData.reference_images.length}/3 referências
-                      </div>
+                <div className="rounded-3xl border border-border bg-background/40 p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-foreground">Formato</div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedFormat === "texto" ? "Ideia/legenda" : "Imagem + legenda"} ·{" "}
+                        <span className="text-foreground">
+                          {selectedFormat === "texto" ? "1 crédito" : "10 créditos"}
+                        </span>
+                      </p>
                     </div>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {(() => {
-                        const items = [
-                          { id: "texto", label: "Texto IA", icon: Type, meta: "só texto" },
-                          { id: "quadrado", label: "Quadrado", icon: Square, meta: "1:1" },
-                          { id: "retrato_4x5", label: "Retrato (4:5)", icon: RectangleVertical, meta: "3:4" },
-                          { id: "story", label: "Story (9:16)", icon: Smartphone, meta: "9:16" },
-                        ];
-                        return items.map((it) => {
-                          const active = selectedFormat === it.id;
-                          const Icon = it.icon;
-                          return (
-                            <button
-                              key={it.id}
-                              type="button"
-                              onClick={() => setSelectedFormat(it.id)}
-                              className={
-                                "h-12 px-4 rounded-2xl border text-sm font-semibold transition-colors inline-flex items-center gap-2 " +
-                                (active
-                                  ? "border-primary/40 bg-primary/10 text-foreground"
-                                  : "border-border bg-background/30 text-muted-foreground hover:bg-background/50 hover:text-foreground")
-                              }
-                            >
-                              <Icon className={"w-4 h-4 " + (active ? "text-primary" : "")} />
-                              {it.label}
-                              <span className={"ml-1 text-[11px] font-medium " + (active ? "text-muted-foreground" : "text-muted-foreground")}>({it.meta})</span>
-                            </button>
-                          );
-                        });
-                      })()}
+                    <div className="text-xs text-muted-foreground">
+                      {brandData.logo_url ? "Logo configurado" : "Sem logo"} · {brandData.reference_images.length}/3
+                      refs
                     </div>
                   </div>
 
-                  {/* Chat */}
-                  <div className="p-5">
-                    <section className="rounded-3xl border border-border bg-background/30 overflow-hidden">
-                      <div className="p-4 border-b border-border flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="h-10 w-10 rounded-2xl border border-border bg-background/40 flex items-center justify-center">
-                            <Sparkles className="w-5 h-5 text-primary" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-semibold text-foreground truncate">Assistente Criativo</div>
-                            <div className="text-[11px] uppercase tracking-widest text-muted-foreground truncate">
-                              Conversational AI Interface
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full bg-success" aria-hidden />
-                          <span className="text-[11px] uppercase tracking-widest text-success">Online</span>
-                        </div>
-                      </div>
-
-                      <div
-                        className={
-                          "flex flex-col " +
-                          (messages.length <= 2 ? "h-[460px] md:h-[440px]" : "h-[70vh] md:h-[560px]")
-                        }
-                      >
-                        <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
-                          {messages.map((msg, idx) => (
-                            <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {formats.map((f) => {
+                      const Icon = f.icon;
+                      const active = selectedFormat === f.id;
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setSelectedFormat(f.id)}
+                          className={
+                            "group relative overflow-hidden rounded-2xl border p-3 text-left transition-colors " +
+                            (active ? "border-primary/40 bg-primary/10" : "border-border bg-card/40 hover:bg-card/60")
+                          }
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
                               <div
-                                className={`max-w-[82%] rounded-3xl px-5 py-4 space-y-3 ${
-                                  msg.role === "user"
-                                    ? "bg-primary text-primary-foreground"
-                                    : "bg-card/60 text-foreground border border-border"
-                                }`}
+                                className={
+                                  "text-sm font-semibold truncate " + (active ? "text-foreground" : "text-foreground")
+                                }
                               >
-                                {msg.image ? (
-                                  <img
-                                    src={msg.image}
-                                    alt="Imagem gerada"
-                                    className="w-full max-h-[420px] object-contain rounded-2xl border border-border bg-background"
-                                    loading="lazy"
-                                  />
-                                ) : null}
-                                {msg.content ? (
-                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                                ) : null}
+                                {f.label}
+                              </div>
+                              <div className="mt-1 text-[11px] text-muted-foreground">
+                                {f.id === "texto"
+                                  ? "Só texto"
+                                  : f.id === "story"
+                                    ? "9:16"
+                                    : f.id === "retrato_4x5"
+                                      ? "3:4"
+                                      : "1:1"}
                               </div>
                             </div>
-                          ))}
-                          <div ref={messagesEndRef} />
-                        </div>
-
-                        <div className="border-t border-border p-4 bg-background/40">
-                          <form onSubmit={handleSend} className="flex items-end gap-3">
-                            <textarea
-                              rows={1}
-                              value={inputValue}
-                              onChange={(e) => setInputValue(e.target.value)}
-                              onInput={(e) => {
-                                // auto-resize
-                                const el = e.currentTarget;
-                                el.style.height = "0px";
-                                el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
-                              }}
-                              onKeyDown={(e) => {
-                                if (!canUse) return;
-                                // Envia com Enter, quebra linha com Shift+Enter
-                                if (e.key === "Enter" && !e.shiftKey) {
-                                  e.preventDefault();
-                                  handleSend(e);
-                                }
-                              }}
-                              disabled={!canUse}
-                              placeholder={
-                                canUse
-                                  ? "Descreva sua ideia com detalhes… (ex: Post elegante para joalheria)"
-                                  : "Upgrade necessário"
+                            <div
+                              className={
+                                "h-9 w-9 rounded-2xl border flex items-center justify-center transition-colors " +
+                                (active
+                                  ? "border-primary/30 bg-primary/10 text-primary"
+                                  : "border-border bg-background/40 text-muted-foreground group-hover:text-foreground")
                               }
-                              className="flex-1 min-h-14 max-h-[240px] rounded-3xl border border-border bg-background/40 px-6 py-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed overflow-y-auto"
-                            />
-                            <button
-                              type="submit"
-                              disabled={!canUse || generating || !inputValue.trim()}
-                              className="h-14 w-14 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-                              title="Enviar"
                             >
-                              {generating ? (
-                                <RefreshCw className="w-5 h-5 animate-spin" />
-                              ) : (
-                                <Send className="w-5 h-5" />
-                              )}
-                            </button>
-                          </form>
-                          <div className="mt-2 text-[11px] text-muted-foreground">
-                            Enter para enviar • Shift+Enter para nova linha
+                              <Icon className="w-4 h-4" />
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    </section>
+
+                          {active && (
+                            <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]" />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                <section className="rounded-3xl border border-border bg-card/60 overflow-hidden">
+                  <div className="p-4 border-b border-border">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-2xl border border-border bg-background/40 flex items-center justify-center">
+                        <Sparkles className="w-4 h-4 text-primary" />
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="text-base font-semibold text-foreground truncate">Gerar</h2>
+                        <p className="text-xs text-muted-foreground truncate">
+                          Descreva o post e eu retorno{" "}
+                          {selectedFormat === "texto" ? "uma ideia/legenda" : "a arte + legenda"}.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col h-[70vh] md:h-[260px]">
+                    <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
+                      {messages.map((msg, idx) => (
+                        <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                          <div
+                            className={`max-w-[82%] rounded-2xl px-4 py-3 space-y-3 ${
+                              msg.role === "user"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted/50 text-foreground border border-border"
+                            }`}
+                          >
+                            {msg.image ? (
+                              <img
+                                src={msg.image}
+                                alt="Imagem gerada"
+                                className="w-full max-h-[420px] object-contain rounded-xl border border-border bg-background"
+                                loading="lazy"
+                              />
+                            ) : null}
+                            {msg.content ? (
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                      <div ref={messagesEndRef} />
+                    </div>
+
+                    <div className="border-t border-border p-4 bg-background/40">
+                      <form onSubmit={handleSend} className="flex items-end gap-2">
+                        <div className="flex-1">
+                          <textarea
+                            ref={textareaRef}
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              // Enter = quebra linha (padrão). Enviar: Ctrl/Cmd+Enter.
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                handleSend(e);
+                              }
+                            }}
+                            disabled={!canUse}
+                            rows={1}
+                            placeholder={
+                              canUse
+                                ? "Ex.: post com oferta de avaliação + CTA no WhatsApp (Ctrl/Cmd+Enter para enviar)"
+                                : "Upgrade necessário"
+                            }
+                            className="w-full rounded-2xl border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed"
+                            style={{ height: inputExpanded ? undefined : 40 }}
+                          />
+
+                          <div className="mt-2 flex items-center justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setInputExpanded((v) => !v)}
+                              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              title={inputExpanded ? "Recolher caixa de texto" : "Expandir caixa de texto"}
+                            >
+                              {inputExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                              {inputExpanded ? "Recolher" : "Expandir"}
+                            </button>
+                            <div className="text-[11px] text-muted-foreground whitespace-nowrap">
+                              Enter: nova linha • Ctrl/Cmd+Enter: enviar
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={!canUse || generating || !inputValue.trim()}
+                          className="h-10 w-10 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Enviar"
+                        >
+                          {generating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                </section>
               </div>
             )}
           </div>
         </section>
 
         {/* Right: tips */}
-        <aside className="lg:w-[360px] space-y-6">
+        <aside className="lg:w-[320px] space-y-6">
           <div className="rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-5">
             <div className="text-sm font-semibold text-foreground">Boas práticas</div>
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
@@ -1258,9 +1245,10 @@ export default function MidiasAppPage({
           <div className="rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-5">
             <div className="text-sm font-semibold text-foreground">Postar agora / Agendar</div>
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-              Para postar ou agendar publicações direto por aqui, conecte seu <span className="text-foreground">Instagram API (Meta)</span>.
-              Cada <span className="text-foreground">postagem</span> ou <span className="text-foreground">agendamento</span> consome{" "}
-              <span className="text-foreground font-semibold">20 créditos</span>.
+              Para postar ou agendar publicações direto por aqui, conecte seu{" "}
+              <span className="text-foreground">Instagram API (Meta)</span>. Cada{" "}
+              <span className="text-foreground">postagem</span> ou <span className="text-foreground">agendamento</span>{" "}
+              consome <span className="text-foreground font-semibold">20 créditos</span>.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -1287,7 +1275,8 @@ export default function MidiasAppPage({
 
             {credits <= 0 && (
               <div className="mt-3 text-xs text-muted-foreground">
-                Dica: compre um pacote em <span className="text-foreground">Assinatura</span> para liberar a conexão e começar a postar/agendar.
+                Dica: compre um pacote em <span className="text-foreground">Assinatura</span> para liberar a conexão e
+                começar a postar/agendar.
               </div>
             )}
           </div>
