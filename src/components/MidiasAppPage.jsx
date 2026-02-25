@@ -13,10 +13,9 @@ import {
   AlertCircle,
   RefreshCw,
   Send,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
-import { lovableCloudClient } from "@/lib/lovableCloudClient";
+import { GoogleGenAI } from "@google/genai";
+import { env } from "@/config/env";
 import GeneratedArtsHistoryList from "@/components/midias/GeneratedArtsHistoryList";
 import GeneratedArtDetailsModal from "@/components/midias/GeneratedArtDetailsModal";
 
@@ -115,7 +114,9 @@ function safeJsonArray(value) {
 
   // Já é array (json/jsonb no banco)
   if (Array.isArray(value)) {
-    return value.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+    return value
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .filter(Boolean);
   }
 
   // Vem como string (ex.: "[\"url1\",\"url2\"]" em coluna TEXT)
@@ -126,7 +127,9 @@ function safeJsonArray(value) {
     try {
       const parsed = JSON.parse(trimmed);
       if (Array.isArray(parsed)) {
-        return parsed.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+        return parsed
+          .map((v) => (typeof v === "string" ? v.trim() : ""))
+          .filter(Boolean);
       }
     } catch (_e) {
       // fallback: tenta quebrar por vírgula caso venha "url1,url2"
@@ -168,13 +171,11 @@ export default function MidiasAppPage({
     {
       role: "assistant",
       content:
-        'Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba "Marca".',
+        "Me diga o que você quer criar e eu gero a arte + legenda no seu estilo. Você só precisa configurar sua marca uma vez na aba \"Marca\".",
     },
   ]);
   const [inputValue, setInputValue] = useState("");
-  const [inputExpanded, setInputExpanded] = useState(true);
   const messagesEndRef = useRef(null);
-  const textareaRef = useRef(null);
 
   const [selectedFormat, setSelectedFormat] = useState("quadrado");
   const [generating, setGenerating] = useState(false);
@@ -477,25 +478,6 @@ export default function MidiasAppPage({
     scrollToBottom();
   }, [messages]);
 
-  // Auto-resize do textarea (quando expandido)
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-
-    // Quando recolhido, mantém altura compacta.
-    if (!inputExpanded) {
-      el.style.height = "40px";
-      el.style.overflowY = "hidden";
-      return;
-    }
-
-    // Reset → mede scrollHeight → aplica (com teto)
-    el.style.height = "0px";
-    const next = Math.min(160, Math.max(40, el.scrollHeight));
-    el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
-  }, [inputValue, inputExpanded]);
-
   const generateFromPrompt = async (userPrompt) => {
     if (!supabaseClient || !resolvedUserId) {
       setErrorMsg("Você precisa estar logado.");
@@ -503,6 +485,11 @@ export default function MidiasAppPage({
     }
     if (!String(userPrompt || "").trim()) return;
     if (!canUse) return;
+
+    if (!env.geminiApiKey) {
+      setErrorMsg("Gemini não configurado. Defina VITE_GEMINI_API_KEY no deploy.");
+      return;
+    }
 
     const isTextOnly = selectedFormat === "texto";
     const creditsToConsume = isTextOnly ? 1 : 10;
@@ -518,67 +505,105 @@ export default function MidiasAppPage({
     try {
       const prompt = String(userPrompt).trim();
 
-      // Contexto de marca (passado para o backend; prompt "de sistema" fica lá)
+      // 1) prepara contexto de marca
       const brandInfo = {
         colors: Array.isArray(brandData.colors) ? brandData.colors : ["#EA580C"],
         tone: brandData.tone_of_voice || "Profissional",
         personality: brandData.personality || "",
+        logoUrl: brandData.logo_url || "",
+        refs: safeJsonArray(brandData.reference_images),
       };
 
-      const isImage = !isTextOnly;
+      const formatLabels = {
+        texto: "caption only (no image)",
+        quadrado: "1:1 square image",
+        retrato_4x5: "3:4 portrait image",
+        story: "9:16 story image",
+      };
 
-      // Para imagem: envia logo + referências (base64) para orientar a estética.
+      const systemInstruction = isTextOnly
+        ? `Você é um copywriter profissional. Escreva uma legenda em PT-BR para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Inclua hashtags relevantes. Não descreva imagens.`
+        : `Você é um designer profissional. Gere uma imagem ${formatLabels[selectedFormat]} para uma marca com: cores ${brandInfo.colors.join(", ")}; tom de voz ${brandInfo.tone}; personalidade ${brandInfo.personality}. Incorpore o logo quando fornecido e siga a estética das referências. Também escreva uma legenda em PT-BR com hashtags. Retorne imagem e texto.`;
+
+      const genAI = new GoogleGenAI({ apiKey: env.geminiApiKey });
+
+      // 2) carrega refs/branding como base64 (apenas quando precisa de imagem)
+      const lastMessageParts = [{ text: prompt }];
+
       let logoBase64 = null;
       let refsBase64 = [];
-      if (isImage) {
-        logoBase64 = brandData.logo_url ? await urlToBase64(brandData.logo_url) : null;
-        refsBase64 = await Promise.all(
-          safeJsonArray(brandData.reference_images).map((url) => urlToBase64(url).catch(() => null)),
-        );
+
+      if (!isTextOnly) {
+        logoBase64 = brandInfo.logoUrl ? await urlToBase64(brandInfo.logoUrl) : null;
+        refsBase64 = await Promise.all((brandInfo.refs || []).map((url) => urlToBase64(url).catch(() => null)));
+
+        if (logoBase64) lastMessageParts.push({ inlineData: { mimeType: "image/png", data: logoBase64 } });
+        (refsBase64 || []).forEach((data) => {
+          if (data) lastMessageParts.push({ inlineData: { mimeType: "image/png", data } });
+        });
       }
 
-      if (!lovableCloudClient) {
-        throw new Error(
-          "Backend de IA não configurado no deploy. Verifique as variáveis do projeto (VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY).",
-        );
-      }
+      const imageConfigMap = {
+        quadrado: "1:1",
+        retrato_4x5: "3:4",
+        story: "9:16",
+      };
 
-      const { data: fnData, error: fnErr } = await lovableCloudClient.functions.invoke("midias-generate", {
-        body: {
-          mode: isTextOnly ? "text" : "image",
-          prompt,
-          format: selectedFormat,
-          brand: brandInfo,
-          logoBase64,
-          refsBase64,
+      const config = {
+        systemInstruction,
+        generationConfig: {
+          responseModalities: isTextOnly ? ["TEXT"] : ["TEXT", "IMAGE"],
         },
+        ...(isTextOnly
+          ? {}
+          : {
+              imageConfig: {
+                aspectRatio: imageConfigMap[selectedFormat] || "1:1",
+              },
+            }),
+      };
+
+      const result = await genAI.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: [{ role: "user", parts: lastMessageParts }],
+        config,
       });
 
-      if (fnErr) {
-        // fnErr pode ter status (429/402/401 etc.)
-        const status = fnErr?.context?.status;
-        const msg =
-          status === 429
-            ? "Muitas solicitações agora. Aguarde um pouco e tente novamente."
-            : status === 402
-              ? "Limite de uso do provedor de IA atingido. Verifique os créditos do workspace."
-              : fnErr.message || "Falha ao gerar.";
-        throw new Error(msg);
+      const parts = result?.candidates?.[0]?.content?.parts || [];
+      let caption = "";
+      let imageBase64 = "";
+
+      parts.forEach((part) => {
+        if (part?.text) caption += part.text;
+        if (part?.inlineData?.data) imageBase64 = part.inlineData.data;
+      });
+
+      caption = String(caption || "").trim();
+
+      // Alguns modelos / prompts podem devolver JSON como texto.
+      // Aceitamos { caption, image } para compatibilidade com fluxos antigos.
+      if (caption && (caption.startsWith("{") || caption.startsWith("["))) {
+        try {
+          const parsed = JSON.parse(caption);
+          if (parsed && typeof parsed === "object") {
+            if (typeof parsed.caption === "string" && parsed.caption.trim()) caption = parsed.caption.trim();
+            if (!imageBase64 && typeof parsed.image === "string" && parsed.image.trim()) imageBase64 = parsed.image.trim();
+          }
+        } catch (_e) {
+          // ignora (não era JSON)
+        }
       }
 
-      const caption = String(fnData?.caption || "").trim();
-      const imageDataUrl = String(fnData?.image || "").trim();
-
-      if (!caption && !imageDataUrl) {
-        throw new Error("A resposta veio vazia. Tente novamente com um prompt mais específico.");
+      if (!caption && !imageBase64) {
+        throw new Error("A resposta do Gemini veio vazia. Tente novamente com um prompt mais específico.");
       }
 
       let imageUrl = "";
-      if (isImage && imageDataUrl) {
-        const blob = await (await fetch(imageDataUrl)).blob();
+      if (!isTextOnly && imageBase64) {
+        const blob = await (await fetch(`data:image/png;base64,${imageBase64}`)).blob();
         const path = `midias/${resolvedUserId}/generated-${Date.now()}.png`;
         const { error: upErr } = await supabaseClient.storage.from(STORAGE_BUCKET).upload(path, blob, {
-          contentType: blob.type || "image/png",
+          contentType: "image/png",
           upsert: true,
         });
         if (upErr) throw upErr;
@@ -597,7 +622,7 @@ export default function MidiasAppPage({
         },
       ]);
 
-      // Consome crédito via RPC (mantém regra atual)
+      // 3) consome crédito via RPC
       const { error: rpcErr } = await supabaseClient.rpc("consume_credits", {
         user_id_param: resolvedUserId,
         amount_to_consume: creditsToConsume,
@@ -605,7 +630,8 @@ export default function MidiasAppPage({
       });
       if (rpcErr) throw rpcErr;
 
-      // Salva no histórico
+
+      // 4) salva no histórico do gerador
       try {
         const { error: insErr } = await supabaseClient.from("generated_arts").insert({
           user_id: resolvedUserId,
@@ -616,10 +642,12 @@ export default function MidiasAppPage({
         });
         if (insErr) throw insErr;
       } catch (saveErr) {
+        // não bloqueia o usuário se falhar salvar; apenas avisa.
         console.warn("Falha ao salvar em generated_arts:", saveErr);
       }
 
       await loadAll();
+
     } catch (e) {
       setErrorMsg(formatError(e));
     } finally {
@@ -668,8 +696,7 @@ export default function MidiasAppPage({
               <div className="text-sm font-semibold text-foreground">Créditos necessários</div>
               <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
                 Para usar o <strong className="text-foreground">Gestor de Mídias</strong>, selecione um pacote em{" "}
-                <strong className="text-foreground">Assinatura → Créditos adicionais</strong> ou adicione créditos ao
-                seu saldo.
+                <strong className="text-foreground">Assinatura → Créditos adicionais</strong> ou adicione créditos ao seu saldo.
               </p>
               {onOpenPlansTab && (
                 <button
@@ -688,7 +715,7 @@ export default function MidiasAppPage({
   }
 
   return (
-    <main className="max-w-[1400px] mx-auto px-4 animate-in fade-in">
+    <main className="max-w-6xl mx-auto animate-in fade-in">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
@@ -696,22 +723,22 @@ export default function MidiasAppPage({
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">Gere criativos e legendas com base na sua marca.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/40 px-4 h-10">
-            <CreditCard className="w-4 h-4 text-primary" />
-            <span className="text-sm text-foreground">Créditos:</span>
-            <span className="text-sm font-semibold text-foreground">{credits}</span>
-            {onOpenPlansTab && (
-              <button
-                type="button"
-                onClick={onOpenPlansTab}
-                className="ml-2 text-xs font-semibold text-primary hover:underline"
-                title="Comprar créditos adicionais"
-              >
-                Adicionar
-              </button>
-            )}
-          </div>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/40 px-4 h-10">
+              <CreditCard className="w-4 h-4 text-primary" />
+              <span className="text-sm text-foreground">Créditos:</span>
+              <span className="text-sm font-semibold text-foreground">{credits}</span>
+              {onOpenPlansTab && (
+                <button
+                  type="button"
+                  onClick={onOpenPlansTab}
+                  className="ml-2 text-xs font-semibold text-primary hover:underline"
+                  title="Comprar créditos adicionais"
+                >
+                  Adicionar
+                </button>
+              )}
+            </div>
           {onBack && (
             <button
               type="button"
@@ -728,8 +755,8 @@ export default function MidiasAppPage({
         <div className="mb-4 rounded-2xl border border-border bg-muted/30 p-4 text-sm text-foreground">
           <div className="font-semibold">Pacote selecionado — aguardando créditos</div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Assim que os créditos entrarem no saldo, o chat libera automaticamente. Enquanto isso, você pode revisar sua
-            Marca e histórico.
+            Assim que os créditos entrarem no saldo, o chat libera automaticamente. Enquanto isso, você pode revisar sua Marca
+            e histórico.
           </p>
         </div>
       )}
@@ -742,7 +769,7 @@ export default function MidiasAppPage({
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left: main */}
-        <section className="lg:flex-[1.35] rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
+        <section className="lg:flex-1 rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 overflow-hidden">
           <div className="p-5 border-b border-border flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-xl border border-border bg-background/40 flex items-center justify-center">
@@ -890,10 +917,7 @@ export default function MidiasAppPage({
                             className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 h-9 text-xs text-foreground hover:bg-card"
                             title="Remover"
                           >
-                            <span
-                              className="h-4 w-4 rounded-full border border-border"
-                              style={{ backgroundColor: c }}
-                            />
+                            <span className="h-4 w-4 rounded-full border border-border" style={{ backgroundColor: c }} />
                             {c}
                             <Trash2 className="w-3.5 h-3.5 opacity-70" />
                           </button>
@@ -931,8 +955,7 @@ export default function MidiasAppPage({
                             "Inspirador",
                             "Premium",
                           ];
-                          const isCustom =
-                            Boolean(brandData.tone_of_voice) && !presets.includes(brandData.tone_of_voice);
+                          const isCustom = Boolean(brandData.tone_of_voice) && !presets.includes(brandData.tone_of_voice);
                           const selectValue = isCustom ? "__custom__" : brandData.tone_of_voice;
 
                           return (
@@ -1071,8 +1094,7 @@ export default function MidiasAppPage({
                     </div>
 
                     <div className="text-xs text-muted-foreground">
-                      {brandData.logo_url ? "Logo configurado" : "Sem logo"} · {brandData.reference_images.length}/3
-                      refs
+                      {brandData.logo_url ? "Logo configurado" : "Sem logo"} · {brandData.reference_images.length}/3 refs
                     </div>
                   </div>
 
@@ -1087,18 +1109,14 @@ export default function MidiasAppPage({
                           onClick={() => setSelectedFormat(f.id)}
                           className={
                             "group relative overflow-hidden rounded-2xl border p-3 text-left transition-colors " +
-                            (active ? "border-primary/40 bg-primary/10" : "border-border bg-card/40 hover:bg-card/60")
+                            (active
+                              ? "border-primary/40 bg-primary/10"
+                              : "border-border bg-card/40 hover:bg-card/60")
                           }
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <div
-                                className={
-                                  "text-sm font-semibold truncate " + (active ? "text-foreground" : "text-foreground")
-                                }
-                              >
-                                {f.label}
-                              </div>
+                              <div className={"text-sm font-semibold truncate " + (active ? "text-foreground" : "text-foreground")}>{f.label}</div>
                               <div className="mt-1 text-[11px] text-muted-foreground">
                                 {f.id === "texto"
                                   ? "Só texto"
@@ -1121,9 +1139,7 @@ export default function MidiasAppPage({
                             </div>
                           </div>
 
-                          {active && (
-                            <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]" />
-                          )}
+                          {active && <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]" />}
                         </button>
                       );
                     })}
@@ -1139,14 +1155,13 @@ export default function MidiasAppPage({
                       <div className="min-w-0">
                         <h2 className="text-base font-semibold text-foreground truncate">Gerar</h2>
                         <p className="text-xs text-muted-foreground truncate">
-                          Descreva o post e eu retorno{" "}
-                          {selectedFormat === "texto" ? "uma ideia/legenda" : "a arte + legenda"}.
+                          Descreva o post e eu retorno {selectedFormat === "texto" ? "uma ideia/legenda" : "a arte + legenda"}.
                         </p>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex flex-col h-[70vh] md:h-[260px]">
+                  <div className="flex flex-col h-[70vh] md:h-[560px]">
                     <div className="flex-1 overflow-y-auto p-5 space-y-4 chat-scroll">
                       {messages.map((msg, idx) => (
                         <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -1165,9 +1180,7 @@ export default function MidiasAppPage({
                                 loading="lazy"
                               />
                             ) : null}
-                            {msg.content ? (
-                              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-                            ) : null}
+                            {msg.content ? <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p> : null}
                           </div>
                         </div>
                       ))}
@@ -1175,45 +1188,15 @@ export default function MidiasAppPage({
                     </div>
 
                     <div className="border-t border-border p-4 bg-background/40">
-                      <form onSubmit={handleSend} className="flex items-end gap-2">
-                        <div className="flex-1">
-                          <textarea
-                            ref={textareaRef}
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              // Enter = quebra linha (padrão). Enviar: Ctrl/Cmd+Enter.
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault();
-                                handleSend(e);
-                              }
-                            }}
-                            disabled={!canUse}
-                            rows={1}
-                            placeholder={
-                              canUse
-                                ? "Ex.: post com oferta de avaliação + CTA no WhatsApp (Ctrl/Cmd+Enter para enviar)"
-                                : "Upgrade necessário"
-                            }
-                            className="w-full rounded-2xl border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed resize-none leading-relaxed"
-                            style={{ height: inputExpanded ? undefined : 40 }}
-                          />
-
-                          <div className="mt-2 flex items-center justify-between gap-3">
-                            <button
-                              type="button"
-                              onClick={() => setInputExpanded((v) => !v)}
-                              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                              title={inputExpanded ? "Recolher caixa de texto" : "Expandir caixa de texto"}
-                            >
-                              {inputExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-                              {inputExpanded ? "Recolher" : "Expandir"}
-                            </button>
-                            <div className="text-[11px] text-muted-foreground whitespace-nowrap">
-                              Enter: nova linha • Ctrl/Cmd+Enter: enviar
-                            </div>
-                          </div>
-                        </div>
+                      <form onSubmit={handleSend} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={inputValue}
+                          onChange={(e) => setInputValue(e.target.value)}
+                          disabled={!canUse}
+                          placeholder={canUse ? "Ex.: post com oferta de avaliação + CTA no WhatsApp" : "Upgrade necessário"}
+                          className="flex-1 rounded-full border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
                         <button
                           type="submit"
                           disabled={!canUse || generating || !inputValue.trim()}
@@ -1232,7 +1215,7 @@ export default function MidiasAppPage({
         </section>
 
         {/* Right: tips */}
-        <aside className="lg:w-[320px] space-y-6">
+        <aside className="lg:w-[360px] space-y-6">
           <div className="rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-5">
             <div className="text-sm font-semibold text-foreground">Boas práticas</div>
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
@@ -1245,10 +1228,9 @@ export default function MidiasAppPage({
           <div className="rounded-3xl border border-border bg-card/70 backdrop-blur supports-[backdrop-filter]:bg-card/50 p-5">
             <div className="text-sm font-semibold text-foreground">Postar agora / Agendar</div>
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-              Para postar ou agendar publicações direto por aqui, conecte seu{" "}
-              <span className="text-foreground">Instagram API (Meta)</span>. Cada{" "}
-              <span className="text-foreground">postagem</span> ou <span className="text-foreground">agendamento</span>{" "}
-              consome <span className="text-foreground font-semibold">20 créditos</span>.
+              Para postar ou agendar publicações direto por aqui, conecte seu <span className="text-foreground">Instagram API (Meta)</span>.
+              Cada <span className="text-foreground">postagem</span> ou <span className="text-foreground">agendamento</span> consome{" "}
+              <span className="text-foreground font-semibold">20 créditos</span>.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -1275,8 +1257,7 @@ export default function MidiasAppPage({
 
             {credits <= 0 && (
               <div className="mt-3 text-xs text-muted-foreground">
-                Dica: compre um pacote em <span className="text-foreground">Assinatura</span> para liberar a conexão e
-                começar a postar/agendar.
+                Dica: compre um pacote em <span className="text-foreground">Assinatura</span> para liberar a conexão e começar a postar/agendar.
               </div>
             )}
           </div>
