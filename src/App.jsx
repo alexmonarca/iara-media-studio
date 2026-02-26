@@ -1054,6 +1054,19 @@ function Dashboard({ session }) {
   const [extraChannels, setExtraChannels] = useState(0);
   const [extraCreditsPack, setExtraCreditsPack] = useState(0); // 0 | 100 | 500 | 1000
   const [creditsBalance, setCreditsBalance] = useState(0);
+
+  // MídIAs (subdomínio): redireciona automaticamente quando o usuário tiver créditos ativos.
+  const MIDIAS_SUBDOMAIN_URL = "https://midias.monarcahub.com/";
+  const hasMidiasRedirectedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasMidiasRedirectedRef.current) return;
+    if ((activeTab === "midias" || activeTab === "midias_app") && creditsBalance > 0) {
+      hasMidiasRedirectedRef.current = true;
+      window.location.assign(MIDIAS_SUBDOMAIN_URL);
+    }
+  }, [activeTab, creditsBalance]);
+
   const [logs, setLogs] = useState([]);
   const [trainingError, setTrainingError] = useState("");
   const [instagramError, setInstagramError] = useState("");
